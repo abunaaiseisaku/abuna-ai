@@ -15,9 +15,7 @@ body {
     padding: 12px;
 }
 
-h2 {
-    font-size: 22px;
-}
+h2 { font-size: 22px; }
 
 button {
     padding: 14px 20px;
@@ -29,9 +27,7 @@ button {
     font-size: 16px;
 }
 
-button:disabled {
-    opacity: 0.4;
-}
+button:disabled { opacity: 0.4; }
 
 input {
     padding: 12px;
@@ -87,8 +83,8 @@ input {
 }
 </style>
 
-<!-- ONNX Runtime Web -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/ort.min.js"></script>
+<!-- ONNX Runtime Web 1.20.1 -->
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
 
 </head>
 
@@ -112,9 +108,13 @@ input {
 
 <h3>② カメラ接続</h3>
 
-<p class="info">
-XIAO ESP32S3 Senseのカメラに接続します
-</p>
+<input
+    type="text"
+    id="ipInput"
+    value="http://192.168.4.1"
+>
+
+<br>
 
 <button id="connectButton">カメラ接続</button>
 
@@ -134,7 +134,6 @@ XIAO ESP32S3 Senseのカメラに接続します
 <p id="count">検出数: 0</p>
 
 <p id="error"></p>
-
 
 <script>
 "use strict";
@@ -159,10 +158,8 @@ let running = false;
 let busy = false;
 let cameraConnected = false;
 let cameraTimer = null;
-let cameraCheckTimer = null;
 
 const stream = document.getElementById("stream");
-
 const canvas = document.getElementById("canvas");
 
 const ctx = canvas.getContext("2d", {
@@ -178,29 +175,18 @@ const error = document.getElementById("error");
 // ======================================
 
 function setStatus(message, color = "#245c2b") {
-
     status.textContent = message;
     status.style.background = color;
-
 }
 
 function showError(message) {
-
     error.textContent = message;
-
-    setStatus(
-        "エラーが発生しました",
-        "#8e2424"
-    );
-
+    setStatus("エラーが発生しました", "#8e2424");
     console.error(message);
-
 }
 
 function clearError() {
-
     error.textContent = "";
-
 }
 
 
@@ -211,12 +197,10 @@ function clearError() {
 function checkONNX() {
 
     if (!window.ort) {
-
         throw new Error(
             "ONNX Runtime Webを読み込めません。\n" +
             "インターネット接続を確認してください。"
         );
-
     }
 
 }
@@ -233,30 +217,27 @@ document.getElementById("loadButton")
         document.getElementById("modelFile").files[0];
 
     if (!file) {
-
         alert("yolo11s.onnxを選択してください");
-
         return;
-
     }
+
+    const button = document.getElementById("loadButton");
 
     try {
 
-        setStatus(
-            "モデル読み込み中...",
-            "#755313"
-        );
+        button.disabled = true;
 
+        setStatus("モデル読み込み中...", "#755313");
         clearError();
 
         checkONNX();
 
-// WASMファイルの場所
-ort.env.wasm.wasmPaths =
-"https://abunaaiseisaku.github.io/abuna-ai/";
+        // 元のWASM読み込み先に復元
+        ort.env.wasm.wasmPaths =
+            "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 
-// iPhoneではシングルスレッドで実行
-ort.env.wasm.numThreads = 1;
+        // シングルスレッド
+        ort.env.wasm.numThreads = 1;
 
         const buffer = await file.arrayBuffer();
 
@@ -268,22 +249,13 @@ ort.env.wasm.numThreads = 1;
             }
         );
 
-        console.log(
-            "Input:",
-            session.inputNames
-        );
-
-        console.log(
-            "Output:",
-            session.outputNames
-        );
+        console.log("Input:", session.inputNames);
+        console.log("Output:", session.outputNames);
 
         document.getElementById("modelInfo").textContent =
             "読み込み成功: " + file.name;
 
-        setStatus(
-            "YOLO11s 読み込み成功！"
-        );
+        setStatus("YOLO11s 読み込み成功！");
 
         updateStartButton();
 
@@ -295,11 +267,14 @@ ort.env.wasm.numThreads = 1;
             "モデル読み込み失敗";
 
         showError(
-            "モデル読み込みエラー:\n" +
-            e.message
+            "モデル読み込みエラー:\n" + e.message
         );
 
         updateStartButton();
+
+    } finally {
+
+        button.disabled = false;
 
     }
 
@@ -313,9 +288,21 @@ ort.env.wasm.numThreads = 1;
 document.getElementById("connectButton")
 .addEventListener("click", () => {
 
-    // 前回の処理を停止
+    let ip =
+        document.getElementById("ipInput").value.trim();
+
+    if (!ip) {
+        alert("IPアドレスを入力してください");
+        return;
+    }
+
+    if (!/^https?:\/\//i.test(ip)) {
+        ip = "http://" + ip;
+    }
+
+    ip = ip.replace(/\/+$/, "") + "/";
+
     clearTimeout(cameraTimer);
-    clearInterval(cameraCheckTimer);
 
     running = false;
     cameraConnected = false;
@@ -326,62 +313,51 @@ document.getElementById("connectButton")
 
     clearError();
 
-    setStatus(
-        "カメラ接続中...",
-        "#755313"
-    );
+    setStatus("カメラ接続中...", "#755313");
 
-    // 古い映像をリセット
     stream.onload = null;
     stream.onerror = null;
 
     stream.removeAttribute("src");
 
-    // 同じ接続元から映像を取得
+    // CORS設定
     stream.crossOrigin = "anonymous";
 
-    const cameraURL =
-        location.origin + "/stream?t=" + Date.now();
+    const cameraURL = ip + "?t=" + Date.now();
 
-    // 接続確認
-    cameraCheckTimer = setInterval(() => {
+    stream.onload = () => {
 
-        if (stream.naturalWidth > 0) {
+        clearTimeout(cameraTimer);
 
-            clearInterval(cameraCheckTimer);
-            clearTimeout(cameraTimer);
-
-            if (cameraConnected) return;
-
-            cameraConnected = true;
-
-            canvas.width = stream.naturalWidth;
-            canvas.height = stream.naturalHeight;
-
-            clearError();
-
-            setStatus(
-                "カメラ映像受信成功！ " +
-                canvas.width + " × " +
-                canvas.height
-            );
-
-            updateStartButton();
-
-            console.log(
-                "Camera connected:",
-                canvas.width,
-                canvas.height
-            );
-
+        if (stream.naturalWidth <= 0) {
+            showError("カメラ画像のサイズを取得できません。");
+            return;
         }
 
-    }, 300);
+        cameraConnected = true;
 
-    // 接続失敗
+        canvas.width = stream.naturalWidth;
+        canvas.height = stream.naturalHeight;
+
+        clearError();
+
+        setStatus(
+            "カメラ映像受信成功！ " +
+            canvas.width + " × " + canvas.height
+        );
+
+        updateStartButton();
+
+        console.log(
+            "Camera connected:",
+            canvas.width,
+            canvas.height
+        );
+
+    };
+
     stream.onerror = () => {
 
-        clearInterval(cameraCheckTimer);
         clearTimeout(cameraTimer);
 
         cameraConnected = false;
@@ -392,19 +368,16 @@ document.getElementById("connectButton")
             "カメラ接続に失敗しました。\n\n" +
             "確認事項:\n" +
             "1. XIAOのWi-Fiに接続しているか\n" +
-            "2. Arduinoコードが新しくなっているか\n" +
-            "3. /stream が登録されているか\n" +
-            "4. index.htmlがSPIFFSに保存されているか"
+            "2. IPアドレスが192.168.4.1か\n" +
+            "3. Safariでhttp://192.168.4.1/が開けるか\n" +
+            "4. HTTPSからHTTPへの接続が制限されていないか"
         );
 
     };
 
-    // タイムアウト
     cameraTimer = setTimeout(() => {
 
         if (!cameraConnected) {
-
-            clearInterval(cameraCheckTimer);
 
             cameraConnected = false;
 
@@ -419,7 +392,6 @@ document.getElementById("connectButton")
 
     }, CAMERA_TIMEOUT);
 
-    // カメラ接続開始
     stream.src = cameraURL;
 
 });
@@ -467,11 +439,7 @@ function preprocess(image) {
     });
 
     tctx.fillStyle = "rgb(114,114,114)";
-
-    tctx.fillRect(
-        0, 0,
-        SIZE, SIZE
-    );
+    tctx.fillRect(0, 0, SIZE, SIZE);
 
     tctx.drawImage(
         image,
@@ -479,8 +447,7 @@ function preprocess(image) {
     );
 
     const pixels = tctx.getImageData(
-        0, 0,
-        SIZE, SIZE
+        0, 0, SIZE, SIZE
     ).data;
 
     const plane = SIZE * SIZE;
@@ -502,17 +469,14 @@ function preprocess(image) {
     }
 
     return {
-
         tensor: new ort.Tensor(
             "float32",
             data,
             [1, 3, SIZE, SIZE]
         ),
-
         scale,
         px,
         py
-
     };
 
 }
@@ -536,12 +500,10 @@ function calculateIoU(a, b) {
     const intersection = iw * ih;
 
     const areaA =
-        (a.x2 - a.x1) *
-        (a.y2 - a.y1);
+        (a.x2 - a.x1) * (a.y2 - a.y1);
 
     const areaB =
-        (b.x2 - b.x1) *
-        (b.y2 - b.y1);
+        (b.x2 - b.x1) * (b.y2 - b.y1);
 
     return intersection /
         (areaA + areaB - intersection + 1e-9);
@@ -596,12 +558,9 @@ function decode(output, prep, imageW, imageH) {
     let channelFirst;
 
     if (dims.length !== 3 || dims[0] !== 1) {
-
         throw new Error(
-            "想定外の出力形状: " +
-            JSON.stringify(dims)
+            "想定外の出力形状: " + JSON.stringify(dims)
         );
-
     }
 
     if (dims[1] === 84) {
@@ -645,10 +604,8 @@ function decode(output, prep, imageW, imageH) {
             const score = value(i, c);
 
             if (score > bestScore) {
-
                 bestScore = score;
                 bestClass = c - 4;
-
             }
 
         }
@@ -658,7 +615,6 @@ function decode(output, prep, imageW, imageH) {
 
         const cx = value(i, 0);
         const cy = value(i, 1);
-
         const w = value(i, 2);
         const h = value(i, 3);
 
@@ -676,22 +632,15 @@ function decode(output, prep, imageW, imageH) {
 
         x1 = Math.max(0, Math.min(imageW, x1));
         y1 = Math.max(0, Math.min(imageH, y1));
-
         x2 = Math.max(0, Math.min(imageW, x2));
         y2 = Math.max(0, Math.min(imageH, y2));
 
         if (x2 <= x1 || y2 <= y1) continue;
 
         detections.push({
-
-            x1,
-            y1,
-            x2,
-            y2,
-
+            x1, y1, x2, y2,
             score: bestScore,
             classId: bestClass
-
         });
 
     }
@@ -723,9 +672,7 @@ function drawDetections(detections) {
     for (const d of detections) {
 
         const color =
-            d.classId === 0
-                ? "#00e676"
-                : "#ffca28";
+            d.classId === 0 ? "#00e676" : "#ffca28";
 
         ctx.strokeStyle = color;
         ctx.fillStyle = color;
@@ -740,8 +687,7 @@ function drawDetections(detections) {
         ctx.fillText(
             TARGETS[d.classId] +
             " " +
-            (d.score * 100).toFixed(0) +
-            "%",
+            (d.score * 100).toFixed(0) + "%",
             d.x1 + 4,
             Math.max(20, d.y1 - 5)
         );
@@ -769,11 +715,7 @@ async function inferenceLoop() {
         try {
 
             if (!cameraConnected || !stream.naturalWidth) {
-
-                throw new Error(
-                    "カメラ映像がありません。"
-                );
-
+                throw new Error("カメラ映像がありません。");
             }
 
             const prep = preprocess(stream);
@@ -805,10 +747,8 @@ async function inferenceLoop() {
 
                 document.getElementById("fps").textContent =
                     "FPS: " +
-                    (
-                        frameCount * 1000 /
-                        (now - lastTime)
-                    ).toFixed(1);
+                    (frameCount * 1000 / (now - lastTime))
+                    .toFixed(1);
 
                 document.getElementById("count").textContent =
                     "検出数: " + detections.length;
@@ -823,8 +763,7 @@ async function inferenceLoop() {
             running = false;
 
             showError(
-                "推論エラー:\n" +
-                e.message
+                "推論エラー:\n" + e.message
             );
 
             document.getElementById("stopButton").disabled = true;
@@ -840,9 +779,7 @@ async function inferenceLoop() {
     }
 
     if (running) {
-
         requestAnimationFrame(inferenceLoop);
-
     }
 
 }
@@ -860,7 +797,6 @@ document.getElementById("startButton")
     running = true;
 
     document.getElementById("startButton").disabled = true;
-
     document.getElementById("stopButton").disabled = false;
 
     clearError();
@@ -885,7 +821,6 @@ document.getElementById("stopButton")
     running = false;
 
     document.getElementById("startButton").disabled = false;
-
     document.getElementById("stopButton").disabled = true;
 
     ctx.clearRect(
@@ -894,14 +829,10 @@ document.getElementById("stopButton")
         canvas.height
     );
 
-    setStatus(
-        "AI停止中",
-        "#755313"
-    );
+    setStatus("AI停止中", "#755313");
 
 });
 
 </script>
-
 </body>
 </html>

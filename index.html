@@ -39,6 +39,7 @@ input {
     width: 90%;
     max-width: 400px;
     margin: 6px;
+    box-sizing: border-box;
 }
 
 #status {
@@ -53,6 +54,7 @@ input {
 #error {
     color: #ff7777;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 #videoArea {
@@ -67,6 +69,7 @@ input {
     display: block;
     border: 2px solid #444;
     border-radius: 8px;
+    box-sizing: border-box;
 }
 
 #canvas {
@@ -128,7 +131,6 @@ input {
 <h3>③ AI推論</h3>
 
 <button id="startButton" disabled>AI開始</button>
-
 <button id="stopButton" disabled>停止</button>
 
 <p id="fps">FPS: 0</p>
@@ -140,12 +142,14 @@ input {
 "use strict";
 
 // ======================================
-// 設定
+// 1. 設定
 // ======================================
 
 const SIZE = 640;
 const CONF = 0.35;
 const IOU = 0.45;
+
+const CAMERA_TIMEOUT = 15000;
 
 const TARGETS = {
     0: "PERSON",
@@ -155,17 +159,21 @@ const TARGETS = {
 let session = null;
 let running = false;
 let busy = false;
+let cameraConnected = false;
+let cameraTimer = null;
 
 const stream = document.getElementById("stream");
 const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext("2d", {
+    willReadFrequently: true
+});
 
 const status = document.getElementById("status");
 const error = document.getElementById("error");
 
 
 // ======================================
-// ステータス
+// 2. ステータス表示
 // ======================================
 
 function setStatus(message, color = "#245c2b") {
@@ -179,9 +187,29 @@ function showError(message) {
     console.error(message);
 }
 
+function clearError() {
+    error.textContent = "";
+}
+
 
 // ======================================
-// ONNXモデル読み込み
+// 3. ONNX Runtime確認
+// ======================================
+
+function checkONNX() {
+
+    if (!window.ort) {
+        throw new Error(
+            "ONNX Runtime Webを読み込めません。\n" +
+            "インターネット接続を確認してください。"
+        );
+    }
+
+}
+
+
+// ======================================
+// 4. ONNXモデル読み込み
 // ======================================
 
 document.getElementById("loadButton")
@@ -198,13 +226,9 @@ document.getElementById("loadButton")
     try {
 
         setStatus("モデル読み込み中...", "#755313");
-        error.textContent = "";
+        clearError();
 
-        if (!window.ort) {
-            throw new Error(
-                "ONNX Runtime Webを読み込めません。インターネット接続を確認してください。"
-            );
-        }
+        checkONNX();
 
         ort.env.wasm.wasmPaths =
             "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
@@ -234,7 +258,15 @@ document.getElementById("loadButton")
     } catch (e) {
 
         session = null;
-        showError(e.message);
+
+        document.getElementById("modelInfo").textContent =
+            "モデル読み込み失敗";
+
+        showError(
+            "モデル読み込みエラー:\n" + e.message
+        );
+
+        updateStartButton();
 
     }
 
@@ -242,7 +274,7 @@ document.getElementById("loadButton")
 
 
 // ======================================
-// カメラ接続
+// 5. カメラ接続
 // ======================================
 
 document.getElementById("connectButton")
@@ -256,57 +288,138 @@ document.getElementById("connectButton")
         return;
     }
 
-    if (!ip.startsWith("http")) {
+    if (!/^https?:\/\//i.test(ip)) {
         ip = "http://" + ip;
     }
 
     ip = ip.replace(/\/+$/, "") + "/";
 
+    // 前の接続処理を停止
+    clearTimeout(cameraTimer);
+
+    running = false;
+    cameraConnected = false;
+
+    document.getElementById("stopButton").disabled = true;
+
+    updateStartButton();
+
+    clearError();
+
     setStatus("カメラ接続中...", "#755313");
 
+    // 古い映像をリセット
+    stream.onload = null;
+    stream.onerror = null;
+
+    stream.removeAttribute("src");
+
+    // ==================================
+    // CORS設定
+    // srcを設定する前に指定すること
+    // ==================================
+
+    stream.crossOrigin = "anonymous";
+
+    // キャッシュ回避用
+    const cameraURL = ip + "?t=" + Date.now();
+
+    // 接続成功
     stream.onload = () => {
+
+        clearTimeout(cameraTimer);
+
+        if (stream.naturalWidth <= 0) {
+            showError("カメラ画像のサイズを取得できません。");
+            return;
+        }
+
+        cameraConnected = true;
 
         canvas.width = stream.naturalWidth;
         canvas.height = stream.naturalHeight;
 
-        setStatus("カメラ映像受信成功！");
+        clearError();
+
+        setStatus(
+            "カメラ映像受信成功！ " +
+            canvas.width + " × " + canvas.height
+        );
+
         updateStartButton();
 
-    };
-
-    stream.onerror = () => {
-
-        showError(
-            "カメラ接続に失敗しました。Wi-FiとIPアドレスを確認してください。"
+        console.log(
+            "Camera connected:",
+            canvas.width,
+            canvas.height
         );
 
     };
 
-    stream.src = ip;
+    // 接続失敗
+    stream.onerror = () => {
+
+        clearTimeout(cameraTimer);
+
+        cameraConnected = false;
+
+        updateStartButton();
+
+        showError(
+            "カメラ接続に失敗しました。\n\n" +
+            "確認事項:\n" +
+            "1. XIAOのWi-Fiに接続しているか\n" +
+            "2. IPアドレスが192.168.4.1か\n" +
+            "3. Safariでhttp://192.168.4.1/が開けるか\n" +
+            "4. HTTPSからHTTPへの接続が制限されていないか"
+        );
+
+    };
+
+    // タイムアウト
+    cameraTimer = setTimeout(() => {
+
+        if (!cameraConnected) {
+
+            cameraConnected = false;
+
+            updateStartButton();
+
+            showError(
+                "カメラ接続がタイムアウトしました。\n\n" +
+                "XIAOの電源とWi-Fi接続を確認してください。"
+            );
+
+        }
+
+    }, CAMERA_TIMEOUT);
+
+    // カメラ接続開始
+    stream.src = cameraURL;
 
 });
 
 
 // ======================================
-// 開始ボタン制御
+// 6. 開始ボタン制御
 // ======================================
 
 function updateStartButton() {
 
     document.getElementById("startButton").disabled =
-        !(session && stream.naturalWidth > 0);
+        !(session && cameraConnected);
 
 }
 
 
 // ======================================
-// 画像前処理
+// 7. 画像前処理
 // ======================================
 
 function preprocess(image) {
 
-    const w = image.width;
-    const h = image.height;
+    const w = image.naturalWidth;
+    const h = image.naturalHeight;
 
     const scale = Math.min(
         SIZE / w,
@@ -336,6 +449,8 @@ function preprocess(image) {
         px, py, nw, nh
     );
 
+    // CORSが許可されていない場合、
+    // ここでSecurityErrorが発生する
     const pixels = tctx.getImageData(
         0, 0, SIZE, SIZE
     ).data;
@@ -373,7 +488,7 @@ function preprocess(image) {
 
 
 // ======================================
-// IoU
+// 8. IoU
 // ======================================
 
 function calculateIoU(a, b) {
@@ -402,7 +517,7 @@ function calculateIoU(a, b) {
 
 
 // ======================================
-// NMS
+// 9. NMS
 // ======================================
 
 function applyNMS(detections) {
@@ -435,7 +550,7 @@ function applyNMS(detections) {
 
 
 // ======================================
-// YOLO出力解析
+// 10. YOLO出力解析
 // ======================================
 
 function decode(output, prep, imageW, imageH) {
@@ -541,7 +656,7 @@ function decode(output, prep, imageW, imageH) {
 
 
 // ======================================
-// 検出枠表示
+// 11. 検出枠表示
 // ======================================
 
 function drawDetections(detections) {
@@ -588,7 +703,7 @@ function drawDetections(detections) {
 
 
 // ======================================
-// 推論ループ
+// 12. 推論ループ
 // ======================================
 
 let lastTime = performance.now();
@@ -603,6 +718,10 @@ async function inferenceLoop() {
         busy = true;
 
         try {
+
+            if (!cameraConnected || !stream.naturalWidth) {
+                throw new Error("カメラ映像がありません。");
+            }
 
             const prep = preprocess(stream);
 
@@ -647,12 +766,14 @@ async function inferenceLoop() {
         } catch (e) {
 
             running = false;
+
             showError(
-                "推論エラー: " + e.message
+                "推論エラー:\n" + e.message
             );
 
             document.getElementById("stopButton").disabled = true;
-            document.getElementById("startButton").disabled = false;
+
+            updateStartButton();
 
         } finally {
 
@@ -670,18 +791,20 @@ async function inferenceLoop() {
 
 
 // ======================================
-// AI開始・停止
+// 13. AI開始
 // ======================================
 
 document.getElementById("startButton")
 .addEventListener("click", () => {
 
-    if (!session || !stream.naturalWidth) return;
+    if (!session || !cameraConnected) return;
 
     running = true;
 
     document.getElementById("startButton").disabled = true;
     document.getElementById("stopButton").disabled = false;
+
+    clearError();
 
     setStatus("YOLO11s 推論中...");
 
@@ -692,6 +815,10 @@ document.getElementById("startButton")
 
 });
 
+
+// ======================================
+// 14. AI停止
+// ======================================
 
 document.getElementById("stopButton")
 .addEventListener("click", () => {

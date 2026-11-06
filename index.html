@@ -251,10 +251,12 @@ document.getElementById("loadButton")
 
         checkONNX();
 
-        ort.env.wasm.wasmPaths =
-"https://abunaaiseisaku.github.io/abuna-ai/wasm/";
+      // WASMファイルの読み込み先
+ort.env.wasm.wasmPaths =
+"https://abunaaiseisaku.github.io/abuna-ai/";
 
-        ort.env.wasm.numThreads = 1;
+// iPhone向け設定
+ort.env.wasm.numThreads = 1;
 
         const buffer = await file.arrayBuffer();
 
